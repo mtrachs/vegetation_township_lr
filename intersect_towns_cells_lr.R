@@ -1,0 +1,121 @@
+#!/usr/bin/Rscript
+
+# code to intersect Charlie's townships with Simon's 8 km grid
+# result is 180x296x(1372+471) array of proportion intersection
+# where 180 is y dimension and 296 is x dimension
+# open issue: intersection only uses discrete approximation with 100 points
+
+
+codeDir <- '~/github_changed_files/composition/code/'
+dataDir <- '~/github_changed_files/composition/data/'
+require(rgdal)
+require(raster)
+
+#source("config")
+
+easternDataDir <- "eastern"
+ohioDataDir <- "ohio"
+
+####################################################################
+# read in shape file info and create raster for PalEON Albers grid
+####################################################################
+
+eastern_townships <- readOGR(dsn = "/home/mathias/vegetation_data", layer = "1372polygons_v0.9-1")
+#eastern_townships <- readOGR(file.path(dataDir, easternDataDir), paste0(easternVersionID, 'polygons_v', easternVersion))
+#ohio_townships <- readOGR(file.path(dataDir, ohioDataDir), paste0('OH', ohioVersionID, 'polygons_v', ohioVersion))
+
+#proj4string(ohio_townships) <- CRS('+init=epsg:4326')  # seems to have a lat/lon proj now, so don't need this
+#ohio_townships <- spTransform(ohio_townships, CRSobj=CRS('+init=epsg:3175'))  # transform to Albers
+
+nTowns <- length(eastern_townships)# + length(ohio_townships)
+
+source(file.path(codeDir, "set_domain.R"))
+
+###########################################################################################################
+#added for lower resolution
+xRange[1] <- xRange[1]+8000
+xRange[2] <- xRange[2]-8000
+yRange[1] <- yRange[1]+8000
+yRange[2] <- yRange[2]-16000
+xRes <- round((xRes-2)/3)
+yRes <- round((yRes-3)/3)
+###########################################################################################################
+
+rast <- raster(crs = CRS('+init=epsg:3175'),
+               xmn = xRange[1], xmx = xRange[2],
+               ymn = yRange[1], ymx = yRange[2],
+               #ncols = xRes, nrows = yRes)
+               ncols = xRes, nrows = yRes)  
+# this raster has rows as y and columns as x and starts with 1,1 in the NW corner, so 180,1 is the SW corner
+
+# NOTE: do not subset as townships@polygons[[index]] as the sorting of this is different than townships[index, ]
+
+
+####################################################################
+# intersect grid with townships ------------------------------------
+####################################################################
+
+mini <- min(unique(eastern_townships$ID))
+
+# intersect with eastern townships
+for(i in sort(unique((eastern_townships$ID)))){
+  aa <- rasterize(x = eastern_townships[eastern_townships$ID == i, ], y = rast, getCover = TRUE)  
+  if(i == mini){
+    poly.stack <- stack((aa)) 
+  }
+  else{
+    poly.stack <- addLayer(poly.stack, aa)
+  }
+}
+
+# intersect with Ohio townships
+# for(i in sort(unique((ohio_townships$ID)))){
+#   aa <- rasterize(x = ohio_townships[ohio_townships$ID == i, ], y = rast, getCover = TRUE)
+#   poly.stack <- addLayer(poly.stack, aa)
+# }
+
+#interTmp <- as.array(poly.stack) * (64/100)  # 100 converts to proportion; 64 has to do with 8x8?
+interTmp <- as.array(poly.stack) * (24*24/100)
+
+# check
+if(FALSE) {
+  area <- unlist(sapply(eastern_townships@polygons, function(x) x@area/1000000))
+  plot(area, apply(interTmp, 3, sum))
+}
+
+inter <- array(0, c(xRes, yRes, nTowns))
+for(i in 1:nTowns)
+  inter[ , , i] <- t(interTmp[ , , i]/sum(interTmp[ , , i]))
+
+
+# inter goes NW to NE and proceeds in lat bands southward. Last cell is the SE corner
+# for plotting, I'll need to reverse the columns
+#####################################################################################################
+easternDomainX <- ((min(easternDomainX)-2)/3):xRes
+easternDomainY <- (min(easternDomainY)/3):yRes
+#####################################################################################################
+
+
+
+
+nCells <- xRes*yRes
+ids <- 1:nCells
+usedIds <- c(matrix(ids, xRes, yRes)[easternDomainX, easternDomainY])
+
+inter <- inter[easternDomainX, easternDomainY, ]
+
+
+#-----------------------------------------------------------------------------------------------------
+#x.coords <- xGrid[easternDomainX]
+#y.coords <- yGrid[easternDomainY]  
+
+###############################################################################################
+coords.tot <- coordinates(poly.stack)
+x.coords <- sort(unique(coords.tot[,'x']))[easternDomainX] # domain is good!
+y.coords <- sort(unique(coords.tot[,'y']))[easternDomainY]  
+###############################################################################################
+
+save(poly.stack,inter, x.coords, y.coords,nTowns, file = file.path(dataDir, paste0('intersection_eastern_twonships_lr.Rda')))
+
+#-----------------------------------------------------------------------------------------------------
+
